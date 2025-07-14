@@ -56,6 +56,48 @@ def calculate_total_cost(pickup_order, task_mapping, shelf_access_points, shelf_
     
     return pickup_cost + delivery_cost + final_travel_cost
 
+def calculate_total_cost_with_optimization(pickup_order, task_mapping, shelf_access_points, shelf_to_access_point_map, delivery_zones, start_pos, rotation_cost, unassigned_shelf):
+    """使用优化的派送顺序计算总成本"""
+    # 使用优化的派送顺序
+    delivery_order_shelves = calculate_optimized_delivery_order(pickup_order, task_mapping, unassigned_shelf)
+    
+    # --- 计算揽收成本 ---
+    current_pos = start_pos
+    pickup_cost = 0
+    last_physical_pos = start_pos
+    for shelf in pickup_order:
+        access_point_name = shelf_to_access_point_map[shelf]
+        access_point_pos = shelf_access_points[access_point_name]
+        if access_point_pos != last_physical_pos:
+            pickup_cost += calculate_distance(last_physical_pos, access_point_pos)
+            last_physical_pos = access_point_pos
+    current_pos = last_physical_pos
+
+    # --- 计算派送成本 ---
+    delivery_cost = 0
+    previous_zone_name = None
+    for shelf in delivery_order_shelves:
+        if shelf == unassigned_shelf:
+            continue
+        target_zone_name = task_mapping[shelf]
+        target_pos = delivery_zones[target_zone_name]
+        delivery_cost += calculate_distance(current_pos, target_pos)
+        current_pos = target_pos
+        is_target_rotation_zone = target_zone_name in ['区域_a', '区域_f']
+        was_previous_rotation_zone = previous_zone_name in ['区域_a', '区域_f']
+        if is_target_rotation_zone and not was_previous_rotation_zone:
+            delivery_cost += rotation_cost
+        previous_zone_name = target_zone_name
+            
+    # --- 计算到达B区的成本 ---
+    if current_pos[0] >= 2000:
+        b_zone_pos = (1999, current_pos[1])
+        final_travel_cost = calculate_distance(current_pos, b_zone_pos)
+    else:
+        final_travel_cost = 0
+    
+    return pickup_cost + delivery_cost + final_travel_cost
+
 def get_path_coordinates(pickup_order, task_mapping, shelf_access_points, shelf_to_access_point_map, delivery_zones, start_pos, unassigned_shelf):
     """根据一个揽收顺序，生成完整的路径坐标点列表，用于绘图"""
     path_coords = [start_pos]
@@ -147,48 +189,6 @@ def visualize_paths(optimal_path_coords, fixed_path_coords, shelf_locs, delivery
     
     plt.show()
 
-def get_two_layer_lifo_order(pickup_order):
-    """
-    根据两层LIFO逻辑计算派送顺序
-    每层独立LIFO，第一层抓完才能放第二层，第二层从最后一个抓的开始放，然后才能放第一层
-    """
-    pickup_list = list(pickup_order)
-    total_shelves = len(pickup_list)
-    
-    # 分成两层，每层最多3个
-    layer1 = pickup_list[:3]  # 第一层：前3个
-    layer2 = pickup_list[3:6] if total_shelves > 3 else []  # 第二层：后3个
-    
-    # 每层独立LIFO
-    layer1_delivery = layer1[::-1]  # 第一层的放置顺序
-    layer2_delivery = layer2[::-1]  # 第二层的放置顺序
-    
-    # 先放第二层，再放第一层
-    delivery_order = layer2_delivery + layer1_delivery
-    
-    return delivery_order
-
-def test_two_layer_lifo():
-    """测试两层LIFO逻辑"""
-    print("\n=== 测试两层LIFO逻辑 ===")
-    
-    # 测试用例：抓取顺序
-    pickup_order = ('货架_3', '货架_6', '货架_5', '货架_2', '货架_1', '货架_4')
-    delivery_order = get_two_layer_lifo_order(pickup_order)
-    
-    print(f"抓取顺序: {pickup_order}")
-    print(f"第一层（前3个）: {pickup_order[:3]} -> 放置顺序: {pickup_order[:3][::-1]}")
-    print(f"第二层（后3个）: {pickup_order[3:]} -> 放置顺序: {pickup_order[3:][::-1]}")
-    print(f"总放置顺序: {delivery_order}")
-    
-    # 验证是否符合预期：'货架_4', '货架_1', '货架_2', '货架_5', '货架_6', '货架_3'
-    expected = ('货架_4', '货架_1', '货架_2', '货架_5', '货架_6', '货架_3')
-    if delivery_order == expected:
-        print("✓ 测试通过！")
-    else:
-        print(f"✗ 测试失败！期望：{expected}")
-    print("========================\n")
-
 def run_comparison():
     """主函数：对比“全局最优”和“固定派送顺序”两种策略的效率，并可视化结果。"""
     # --- 1. 数据设定 ---
@@ -273,7 +273,7 @@ def run_comparison():
 
     # --- 5. 对比并输出结果 ---
     print("\n\n=============== 策略对比结果 (基于完整抽签逻辑) ================")
-    optimal_delivery_order = get_two_layer_lifo_order(best_pickup_order_optimal)
+    optimal_delivery_order = calculate_optimized_delivery_order(best_pickup_order_optimal, task_mapping, unassigned_shelf)
     print(f"\n【方案一：全局最优策略】")
     print(f"  - 最短总成本 (路程+旋转): {min_total_cost_optimal:.2f}")
     print(f"  - 最优揽收顺序: {best_pickup_order_optimal}")
@@ -303,6 +303,100 @@ def run_comparison():
     fixed_path_coords = get_path_coordinates(fixed_pickup_order, task_mapping, shelf_access_points, shelf_to_access_point_map, delivery_zones, start_point, unassigned_shelf)
     
     visualize_paths(optimal_path_coords, fixed_path_coords, shelf_access_points, delivery_zones, start_point)
+
+def calculate_optimized_delivery_order(pickup_order, task_mapping, unassigned_shelf):
+    """
+    优化的派送顺序计算，考虑：
+    1. 去同一个区域的货箱应该连续放置
+    2. 特殊货箱（码垛）应该紧跟在其目标区域的最后一个货箱后面
+    3. 特殊货箱不能第一个派送
+    """
+    # 获取两层LIFO的基本顺序
+    base_order = get_two_layer_lifo_order(pickup_order)
+    
+    # 如果没有特殊货箱，直接返回基本顺序
+    if not unassigned_shelf:
+        return base_order
+    
+    # 按区域分组正常货箱
+    zone_groups = {}
+    for shelf in base_order:
+        if shelf == unassigned_shelf:
+            continue
+        zone = task_mapping[shelf]
+        if zone not in zone_groups:
+            zone_groups[zone] = []
+        zone_groups[zone].append(shelf)
+    
+    # 构建优化的派送顺序
+    optimized_order = []
+    processed_shelves = set()
+    
+    # 遍历基本顺序，但按区域分组处理
+    for shelf in base_order:
+        if shelf in processed_shelves or shelf == unassigned_shelf:
+            continue
+            
+        current_zone = task_mapping[shelf]
+        
+        # 一次性处理该区域的所有货箱
+        for zone_shelf in zone_groups[current_zone]:
+            if zone_shelf not in processed_shelves:
+                optimized_order.append(zone_shelf)
+                processed_shelves.add(zone_shelf)
+        
+        # 如果是旋转区域（a或f），在该区域的最后一个货箱后面添加特殊货箱
+        if current_zone in ['区域_a', '区域_f'] and unassigned_shelf not in processed_shelves:
+            optimized_order.append(unassigned_shelf)
+            processed_shelves.add(unassigned_shelf)
+    
+    # 如果特殊货箱还没被处理，添加到最后
+    if unassigned_shelf not in processed_shelves:
+        optimized_order.append(unassigned_shelf)
+    
+    return optimized_order
+
+def get_two_layer_lifo_order(pickup_order):
+    """
+    根据两层LIFO逻辑计算派送顺序
+    每层独立LIFO，第一层抓完才能放第二层，第二层从最后一个抓的开始放，然后才能放第一层
+    """
+    pickup_list = list(pickup_order)
+    total_shelves = len(pickup_list)
+    
+    # 分成两层，每层最多3个
+    layer1 = pickup_list[:3]  # 第一层：前3个
+    layer2 = pickup_list[3:6] if total_shelves > 3 else []  # 第二层：后3个
+    
+    # 每层独立LIFO
+    layer1_delivery = layer1[::-1]  # 第一层的放置顺序
+    layer2_delivery = layer2[::-1]  # 第二层的放置顺序
+    
+    # 先放第二层，再放第一层
+    delivery_order = layer2_delivery + layer1_delivery
+    
+    return delivery_order
+
+def test_two_layer_lifo():
+    """测试两层LIFO逻辑"""
+    print("\n=== 测试两层LIFO逻辑 ===")
+    
+    # 测试用例：抓取顺序
+    pickup_order = ('货架_3', '货架_6', '货架_5', '货架_2', '货架_1', '货架_4')
+    delivery_order = get_two_layer_lifo_order(pickup_order)
+    
+    print(f"抓取顺序: {pickup_order}")
+    print(f"第一层（前3个）: {pickup_order[:3]} -> 放置顺序: {pickup_order[:3][::-1]}")
+    print(f"第二层（后3个）: {pickup_order[3:]} -> 放置顺序: {pickup_order[3:][::-1]}")
+    print(f"总放置顺序: {delivery_order}")
+    
+    # 验证是否符合预期：'货架_4', '货架_1', '货架_2', '货架_5', '货架_6', '货架_3'
+    expected = ['货架_4', '货架_1', '货架_2', '货架_5', '货架_6', '货架_3']
+    if delivery_order == expected:
+        print("✓ 测试通过！")
+    else:
+        print(f"✗ 测试失败！期望：{expected}")
+    print("========================\n")
 
 # 运行对比分析
 if __name__ == '__main__':
