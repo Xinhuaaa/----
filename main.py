@@ -167,7 +167,7 @@ def run_fixed_strategy():
     }
     start_point = (2000, 1000)
     ROTATION_COST = 2000
-    print(f"注意：已设定单次进入旋转区域(a/f)的惩罚值为 {ROTATION_COST}。")
+    # print(f"注意：已设定单次进入旋转区域(a/f)的惩罚值为 {ROTATION_COST}。")
 
     # --- 2. 模拟抽签 ---
     print("\n--- 正在进行完整的随机抽签... ---")
@@ -258,8 +258,6 @@ def run_fixed_strategy():
                     temp_order.append(unassigned_shelf) # 先抓特殊货箱
                 temp_order.append(shelf) # 再抓普通货箱
             final_pickup_order_list = temp_order
-            print(f"优化：检测到特殊货箱 ({unassigned_shelf}) 与普通货箱 ({trigger_shelf}) 在同一揽收点。")
-            print(f"       将先抓取特殊货箱 ({unassigned_shelf})，再抓取 {trigger_shelf}。")
         else:
             # 理论上此情况不会发生，但作为安全保障保留
             final_pickup_order_list = base_pickup_shelves + [unassigned_shelf]
@@ -270,7 +268,7 @@ def run_fixed_strategy():
 
     fixed_pickup_order = tuple(final_pickup_order_list)
     cost_fixed_strategy = calculate_total_cost(fixed_pickup_order, task_mapping, shelf_access_points, shelf_to_access_point_map, delivery_zones, start_point, ROTATION_COST, unassigned_shelf)
-    print("计算完成！")
+    # print("计算完成！")
 
     # --- 4. 输出结果 ---
     print("\n\n=============== 优化策略结果 ================")
