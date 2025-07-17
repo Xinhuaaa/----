@@ -276,6 +276,10 @@ def run_fixed_strategy():
     print(f"  - 总成本 (路程+旋转): {cost_fixed_strategy:.2f}")
     print(f"  - 最终揽收顺序: {fixed_pickup_order}")
     
+    # 输出简化的货架编号序列
+    shelf_numbers = [shelf.replace('货架_', '') for shelf in fixed_pickup_order]
+    print(f"  - 揽收编号序列: {','.join(shelf_numbers)}")
+    
     # 获取派送顺序，并处理码垛逻辑冲突
     fixed_delivery_order = get_two_layer_lifo_order(fixed_pickup_order, unassigned_shelf)
     print(f"  - 派送顺序 (两层LIFO):")
