@@ -62,9 +62,11 @@ def get_pickup_order(empty_zone, task_map, special_shelf):
     
     # 3. 根据车辆双层FIFO机制反推揽收顺序
     if len(delivery_shelves) == 5:  # 5个普通货架 + 1个特殊货架
-        # 需要确定特殊货架在放置序列中的位置
-        # 特殊货架应该放在倒数第二位（避免最后放置）
-        delivery_shelves.insert(-1, special_shelf)  # 插入倒数第二位
+        # 特殊货架可以插入到任何位置，包括最后一位
+        # 这样可以让特殊货架出现在揽收顺序的任何位置(0-5)
+        possible_positions = list(range(len(delivery_shelves) + 1))  # 0到5的位置
+        insert_pos = random.choice(possible_positions)
+        delivery_shelves.insert(insert_pos, special_shelf)
     
     # 现在有6个货架的完整放置顺序
     if len(delivery_shelves) == 6:
@@ -198,6 +200,29 @@ def main():
     print(f"第二层(后3个): {pickup_order[3:]}")
     
     print_delivery_steps(delivery_order, task_map, special_shelf)
+    
+    # 额外输出格式化信息
+    print_formatted_output(pickup_order, special_shelf, empty_zone)
+
+def print_formatted_output(pickup_order, special_shelf, empty_zone):
+    """输出格式化的关键信息"""
+    # 1. 揽收顺序：提取货架编号
+    pickup_numbers = [shelf.split('_')[1] for shelf in pickup_order]
+    pickup_str = ','.join(pickup_numbers)
+    
+    # 2. 特殊货架在派送顺序中的位置（从0开始）
+    if special_shelf:
+        delivery_order = get_delivery_order(pickup_order)
+        special_position = delivery_order.index(special_shelf)
+    else:
+        special_position = -1  # 无特殊货架
+    
+    # 3. 路线类型：1为正常路线，2为f轮空路线
+    route_type = 2 if empty_zone == '区域_f' else 1
+    
+    print(f"\n=== 格式化输出 ===")
+    print(f"揽收顺序({pickup_str}):特殊货箱在派送的顺序({special_position});路线({route_type})")
+    print(f"{pickup_str}:{special_position};{route_type}")
 
 if __name__ == '__main__':
     main()
