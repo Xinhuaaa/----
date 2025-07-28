@@ -1,328 +1,330 @@
 import math
 import random
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 
-# 设置matplotlib以支持中文显示
-plt.rcParams['font.sans-serif'] = ['SimHei']  # 指定默认字体
-plt.rcParams['axes.unicode_minus'] = False  # 解决保存图像是负号'-'显示为方块的问题
+# ---------- 参数数据 ----------
+shelf_access_points = {
+    '揽收点_左': (180, 1500), '揽收点_中': (180, 1000), '揽收点_右': (180, 500),
+}
+shelf_to_access_point_map = {
+    '货架_1': '揽收点_左', '货架_4': '揽收点_左',
+    '货架_2': '揽收点_中', '货架_5': '揽收点_中',
+    '货架_3': '揽收点_右', '货架_6': '揽收点_右',
+}
+delivery_zones = {
+    '区域_a': (3250, 1895), '区域_b': (3850, 1605), '区域_c': (3850, 1235),
+    '区域_d': (3850, 845), '区域_e': (3850, 455), '区域_f': (3250, 105)
+}
+start_point = (2000, 1000)
+ROTATION_COST = 2000
 
-def calculate_distance(pos1, pos2):
-    """计算两个坐标点之间的欧几里得距离"""
-    return math.sqrt((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2)
+# ---------- 路径与成本计算 ----------
+def calculate_distance(a, b):
+    return math.hypot(a[0] - b[0], a[1] - b[1])
 
-def calculate_total_cost(pickup_order, task_mapping, shelf_access_points, shelf_to_access_point_map, delivery_zones, start_pos, rotation_cost, unassigned_shelf):
-    """为一个给定的揽收/派送顺序计算总行程成本。"""
-    # 按照两层LIFO逻辑计算派送顺序
-    delivery_order_shelves = get_two_layer_lifo_order(pickup_order, unassigned_shelf)
-    
-    # --- 计算揽收成本 ---
-    current_pos = start_pos
-    pickup_cost = 0
-    last_physical_pos = start_pos
+def calculate_total_cost(pickup_order, task_map, shelf_aps, shelf2ap, zones, start, rot_cost, special):
+    delivery_order = get_delivery_order(pickup_order, special)
+    cost = 0
+    pos = start
     for shelf in pickup_order:
-        access_point_name = shelf_to_access_point_map[shelf]
-        access_point_pos = shelf_access_points[access_point_name]
-        if access_point_pos != last_physical_pos:
-            pickup_cost += calculate_distance(last_physical_pos, access_point_pos)
-            last_physical_pos = access_point_pos
-    current_pos = last_physical_pos
+        ap_pos = shelf_aps[shelf2ap[shelf]]
+        if ap_pos != pos:
+            cost += calculate_distance(pos, ap_pos)
+            pos = ap_pos
 
-    # --- 计算派送成本 ---
-    delivery_cost = 0
-    previous_zone_name = None
-    for shelf in delivery_order_shelves:
-        if shelf == unassigned_shelf:
+    prev_zone = None
+    for shelf in delivery_order:
+        if shelf == special:
             continue
-        target_zone_name = task_mapping[shelf]
-        target_pos = delivery_zones[target_zone_name]
-        delivery_cost += calculate_distance(current_pos, target_pos)
-        current_pos = target_pos
-        is_target_rotation_zone = target_zone_name in ['区域_a', '区域_f']
-        was_previous_rotation_zone = previous_zone_name in ['区域_a', '区域_f']
-        if is_target_rotation_zone and not was_previous_rotation_zone:
-            delivery_cost += rotation_cost
-        previous_zone_name = target_zone_name
-            
-    # --- 计算到达B区的成本 ---
-    if current_pos[0] >= 2000:
-        b_zone_pos = (1999, current_pos[1])
-        final_travel_cost = calculate_distance(current_pos, b_zone_pos)
-    else:
-        final_travel_cost = 0
-    
-    return pickup_cost + delivery_cost + final_travel_cost
+        zone = task_map[shelf]
+        zone_pos = zones[zone]
+        cost += calculate_distance(pos, zone_pos)
+        if zone in ['区域_a', '区域_f'] and (prev_zone not in ['区域_a', '区域_f']):
+            cost += rot_cost
+        pos = zone_pos
+        prev_zone = zone
 
+    if pos[0] >= 2000:
+        cost += calculate_distance(pos, (1999, pos[1]))
+    return cost
 
-
-def get_path_coordinates(pickup_order, task_mapping, shelf_access_points, shelf_to_access_point_map, delivery_zones, start_pos, unassigned_shelf):
-    """根据一个揽收顺序，生成完整的路径坐标点列表，用于绘图"""
-    path_coords = [start_pos]
-    
-    # 揽收路径
-    last_physical_pos = start_pos
+def get_path_coordinates(pickup_order, task_map, shelf_aps, shelf2ap, zones, start, special):
+    coords = [start]
+    pos = start
     for shelf in pickup_order:
-        access_point_name = shelf_to_access_point_map[shelf]
-        access_point_pos = shelf_access_points[access_point_name]
-        if access_point_pos != last_physical_pos:
-            path_coords.append(access_point_pos)
-            last_physical_pos = access_point_pos
-    
-    # 派送路径 - 使用两层LIFO逻辑
-    delivery_order_shelves = get_two_layer_lifo_order(pickup_order, unassigned_shelf)
-    current_pos = last_physical_pos
-    for shelf in delivery_order_shelves:
-        if shelf == unassigned_shelf:
-            # 码垛任务，位置不变，复制上一个点
-            path_coords.append(path_coords[-1])
-            continue
-        target_zone_name = task_mapping[shelf]
-        target_pos = delivery_zones[target_zone_name]
-        path_coords.append(target_pos)
-        current_pos = target_pos
+        ap_pos = shelf_aps[shelf2ap[shelf]]
+        if ap_pos != pos:
+            coords.append(ap_pos)
+            pos = ap_pos
+    delivery_order = get_delivery_order(pickup_order, special)
+    for shelf in delivery_order:
+        if shelf == special:
+            coords.append(coords[-1])
+        else:
+            coords.append(zones[task_map[shelf]])
+            pos = zones[task_map[shelf]]
+    if pos[0] >= 2000:
+        coords.append((1999, pos[1]))
+    return coords
 
-    # 到达B区的路径
-    if current_pos[0] >= 2000:
-        b_zone_pos = (1999, current_pos[1])
-        path_coords.append(b_zone_pos)
+# ---------- 策略逻辑 ----------
+def generate_task_mapping(shelves, boxes, stacks, zones):
+    random.shuffle(boxes)
+    random.shuffle(zones)
+    box_map = dict(zip(shelves, boxes))
+    unassigned_zone = zones.pop()
+    stack_map = dict(zip(stacks, zones))
 
-    return path_coords
-
-def visualize_path(path_coords, shelf_locs, delivery_zones, start_pos):
-    """使用matplotlib可视化路径"""
-    fig, ax = plt.subplots(figsize=(16, 8))
-    ax.set_facecolor('#f0f0f0')
-
-    # 绘制场地边界和中心线
-    ax.add_patch(patches.Rectangle((0, 0), 4000, 2000, linewidth=2, edgecolor='black', facecolor='none'))
-    ax.plot([2000, 2000], [0, 2000], 'k--', label='中心线')
-
-    # 绘制货架和置物区
-    for name, pos in shelf_locs.items():
-        ax.plot(pos[0], pos[1], 'bs', markersize=10, label='揽收点' if '揽收点_左' in name else "")
-        ax.text(pos[0] + 50, pos[1], name, fontsize=9)
-    
-    for name, pos in delivery_zones.items():
-        ax.plot(pos[0], pos[1], 'go', markersize=10, label='置物区' if '区域_a' in name else "")
-        ax.text(pos[0] + 50, pos[1], name, fontsize=9)
-
-    # 绘制起始点
-    ax.plot(start_pos[0], start_pos[1], 'y*', markersize=15, label='起始点')
-    ax.text(start_pos[0] + 50, start_pos[1], 'Start', fontsize=12)
-    
-    # 绘制B区域
-    ax.axvspan(0, 2000, alpha=0.2, color='orange', label='B区域（目标区域）')
-
-    # 绘制路径
-    x_coords, y_coords = zip(*path_coords)
-    stacking_point_indices = [i for i, p in enumerate(path_coords) if i > 0 and p == path_coords[i-1]]
-
-    for i in range(len(x_coords) - 1):
-        is_stacking_move = (i+1) in stacking_point_indices
-        if not is_stacking_move:
-             ax.plot(x_coords[i:i+2], y_coords[i:i+2], color='red', linewidth=2, linestyle='-', alpha=0.8, label='路径' if i == 0 else "")
-
-    # 单独标记码垛点，并确保图例只出现一次
-    stacking_point_labeled = False
-    for idx in stacking_point_indices:
-        label_text = ""
-        if not stacking_point_labeled:
-            label_text = '码垛点'
-            stacking_point_labeled = True
-        ax.plot(x_coords[idx], y_coords[idx], marker='D', color='purple', markersize=8, label=label_text)
-
-    # 标记路径终点
-    ax.plot(x_coords[-1], y_coords[-1], marker='s', color='red', markersize=10, label='终点')
-
-    # 设置图表属性
-    ax.set_title('优化策略路径可视化', fontsize=16)
-    ax.set_xlabel('X 坐标 (mm)')
-    ax.set_ylabel('Y 坐标 (mm)')
-    ax.set_xlim(-100, 4100)
-    ax.set_ylim(-100, 2100)
-    ax.set_aspect('equal', adjustable='box')
-    ax.grid(True, linestyle=':', alpha=0.6)
-    
-    # 创建唯一的图例
-    handles, labels = plt.gca().get_legend_handles_labels()
-    by_label = dict(zip(labels, handles))
-    ax.legend(by_label.values(), by_label.keys())
-    
-    plt.show()
-
-def run_fixed_strategy():
-    """主函数：使用优化策略并可视化结果。"""
-    # --- 1. 数据设定 ---
-    shelf_access_points = {
-        '揽收点_左': (180, 1500), '揽收点_中': (180, 1000), '揽收点_右': (180, 500),
-    }
-    shelf_to_access_point_map = {
-        '货架_1': '揽收点_左', '货架_4': '揽收点_左',
-        '货架_2': '揽收点_中', '货架_5': '揽收点_中',
-        '货架_3': '揽收点_右', '货架_6': '揽收点_右',
-    }
-    delivery_zones = {
-        '区域_a': (3250, 1895), '区域_b': (3850, 1605), '区域_c': (3850, 1235),
-        '区域_d': (3850, 845), '区域_e': (3850, 455), '区域_f': (3250, 105)
-    }
-    start_point = (2000, 1000)
-    ROTATION_COST = 2000
-    # print(f"注意：已设定单次进入旋转区域(a/f)的惩罚值为 {ROTATION_COST}。")
-
-    # --- 2. 模拟抽签 ---
-    print("\n--- 正在进行完整的随机抽签... ---")
-    shelf_names = list(shelf_to_access_point_map.keys())
-    box_numbers = [f'货箱_{i}' for i in range(1, 7)]
-    random.shuffle(box_numbers)
-    shelf_to_box_map = {shelf: box for shelf, box in zip(shelf_names, box_numbers)}
+    task_map = {}
+    special_shelf = None
     print("\n【抽签结果 1: 货架 -> 货箱】")
-    for shelf, box in shelf_to_box_map.items():
+    for shelf, box in box_map.items():
         print(f"  - {shelf} 上放置的是 {box}")
-
-    stack_numbers = [f'纸垛_{i}#' for i in range(1, 7)]
-    zone_names = list(delivery_zones.keys())
-    random.shuffle(zone_names)
-    empty_zone = zone_names.pop()
-    stack_to_zone_map = {stack: zone for stack, zone in zip(stack_numbers, zone_names)}
     print("\n【抽签结果 2: 纸垛 -> 区域】")
-    for stack, zone in stack_to_zone_map.items():
+    for stack, zone in stack_map.items():
+        print(f"  - {stack} 放置在 {zone}")
+    print(f"  - ★ {unassigned_zone} 是本轮的轮空区域 ★")
+
+    for shelf, box in box_map.items():
+        stack = box.replace('货箱_', '纸垛_') + '#'
+        if stack in stack_map:
+            task_map[shelf] = stack_map[stack]
+        else:
+            special_shelf = shelf
+    return task_map, special_shelf, unassigned_zone
+
+def get_delivery_zone_order(empty_zone):
+    """
+    根据轮空区域确定放置顺序
+    - 如果轮空区域在 a,b,c,d,e 中 → 放置顺序：a,b,c,d,e,f（去掉轮空的）
+    - 如果轮空区域为 f → 放置顺序：e,d,c,b,a
+    """
+    if empty_zone == '区域_f':
+        # 轮空区域为f，放置顺序为：e,d,c,b,a
+        return ['区域_e', '区域_d', '区域_c', '区域_b', '区域_a']
+    else:
+        # 轮空区域在a,b,c,d,e中，放置顺序为：a,b,c,d,e,f（去掉轮空的）
+        default_order = ['区域_a', '区域_b', '区域_c', '区域_d', '区域_e', '区域_f']
+        return [z for z in default_order if z != empty_zone]
+
+def calculate_pickup_order_from_delivery_zones(zone_order, task_map, special_shelf):
+    """
+    根据配送区域顺序和车辆FIFO机制计算揽收顺序
+    
+    车辆机制：
+    - 前3个货箱放第一层FIFO，后3个货箱放第二层FIFO
+    - 放置时：先放第二层FIFO(4,5,6)，再放第一层FIFO(1,2,3)
+    - 最终放置顺序：[4,5,6,1,2,3]
+    
+    Args:
+        zone_order: 配送区域顺序 (如：['区域_e', '区域_d', '区域_c', '区域_b', '区域_a'])
+        task_map: 货架到区域的映射
+        special_shelf: 特殊货架
+    
+    Returns:
+        pickup_order: 揽收顺序
+    """
+    # 从配送区域顺序获取对应的货架顺序（期望的放置顺序）
+    zone_to_shelf = {v: k for k, v in task_map.items()}
+    desired_delivery_order = [zone_to_shelf[zone] for zone in zone_order if zone in zone_to_shelf]
+    
+    # 如果有特殊货架，添加到期望放置顺序的末尾
+    if special_shelf:
+        desired_delivery_order.append(special_shelf)
+    
+    # 根据车辆FIFO机制反推揽收顺序
+    # 期望放置顺序：[a, b, c, d, e, special] (6个货架)
+    # 车辆放置机制：先放第二层[4,5,6]，再放第一层[1,2,3]
+    # 所以：第二层FIFO = [a,b,c], 第一层FIFO = [d,e,special]
+    # 揽收顺序应该是：[d,e,special,a,b,c]
+    
+    if len(desired_delivery_order) != 6:
+        # 处理非标准情况
+        return desired_delivery_order
+    
+    # 标准6个货箱的情况
+    first_layer_shelves = desired_delivery_order[3:]  # [d,e,special] - 后放的3个
+    second_layer_shelves = desired_delivery_order[:3]  # [a,b,c] - 先放的3个
+    
+    # 揽收顺序：先收第一层的货架，再收第二层的货架
+    pickup_order = first_layer_shelves + second_layer_shelves
+    
+    return pickup_order
+
+def get_optimized_pickup_order(zone_order, task_map, special_shelf, shelf_to_access_point_map):
+    """
+    获取优化的揽收顺序，考虑特殊货架的揽收点优化
+    """
+    # 首先根据配送顺序计算基础的揽收顺序
+    pickup_order = calculate_pickup_order_from_delivery_zones(zone_order, task_map, special_shelf)
+    
+    # 如果有特殊货架，尝试优化其在揽收顺序中的位置（顺路原则）
+    if special_shelf and special_shelf in pickup_order:
+        # 移除特殊货架，然后根据揽收点就近原则重新插入
+        pickup_order.remove(special_shelf)
+        pickup_order = insert_special_shelf(pickup_order, special_shelf, shelf_to_access_point_map)
+    
+    return pickup_order
+
+def insert_special_shelf(pickup_order, special, shelf2ap):
+    if not special:
+        return pickup_order
+    special_ap = shelf2ap[special]
+    for i, s in enumerate(pickup_order):
+        if shelf2ap[s] == special_ap:
+            return pickup_order[:i] + [special] + pickup_order[i:]
+    return pickup_order + [special]
+
+def get_delivery_order(pickup_order, special=None):
+    """
+    根据车辆的双层FIFO存储机制确定放置顺序
+    车辆存储：前3个货箱放第一层，后3个货箱放第二层
+    每层都是独立的先进先出(FIFO)队列
+    放置时：先放第二层的FIFO(4,5,6)，再放第一层的FIFO(1,2,3)
+    
+    Args:
+        pickup_order: 抓取顺序列表 [1,2,3,4,5,6]
+        special: 特殊货架（对应轮空区域的货箱）
+    
+    Returns:
+        delivery_order: 放置顺序列表 [4,5,6,1,2,3]
+    """
+    if len(pickup_order) != 6:
+        # 如果不是6个货箱，按原逻辑处理
+        l1, l2 = pickup_order[:3], pickup_order[3:]
+        order = list(reversed(l2)) + list(reversed(l1))
+    else:
+        # 标准6个货箱：两层独立的FIFO
+        # 第一层FIFO：前3个货箱 [1,2,3]
+        # 第二层FIFO：后3个货箱 [4,5,6]  
+        # 放置顺序：先放第二层FIFO，再放第一层FIFO
+        first_layer_fifo = pickup_order[:3]   # [1,2,3]
+        second_layer_fifo = pickup_order[3:]  # [4,5,6]
+        order = second_layer_fifo + first_layer_fifo  # [4,5,6,1,2,3]
+    
+    # 如果有特殊货箱且它是第一个要放置的，需要调整顺序
+    # 因为特殊货箱需要码垛在其他纸垛上，不能最先放置
+    if special and len(order) > 1 and order[0] == special:
+        order[0], order[1] = order[1], order[0]
+    
+    return order
+
+def test_empty_zone_f():
+    """测试轮空区域为f的情况"""
+    shelves = [f'货架_{i}' for i in range(1, 7)]
+    boxes = [f'货箱_{i}' for i in range(1, 7)]
+    stacks = [f'纸垛_{i}#' for i in range(1, 7)]
+    zones = list(delivery_zones.keys())
+    
+    # 手动设置轮空区域为f的情况
+    empty_zone = '区域_f'
+    remaining_zones = [z for z in zones if z != empty_zone]
+    
+    # 随机分配纸垛到剩余区域
+    random.shuffle(remaining_zones)
+    stack_map = dict(zip(stacks[:5], remaining_zones))  # 只有5个纸垛
+    
+    # 随机分配货箱到货架
+    random.shuffle(boxes)
+    box_map = dict(zip(shelves, boxes))
+    
+    # 创建任务映射
+    task_map = {}
+    special_shelf = None
+    
+    print(f"\n=== 测试轮空区域为f的情况 ===")
+    print("【货架 -> 货箱】")
+    for shelf, box in box_map.items():
+        print(f"  - {shelf} 上放置的是 {box}")
+    
+    print("【纸垛 -> 区域】")
+    for stack, zone in stack_map.items():
         print(f"  - {stack} 放置在 {zone}")
     print(f"  - ★ {empty_zone} 是本轮的轮空区域 ★")
-
-    task_mapping = {}
-    unassigned_shelf = None
-    for shelf, box in shelf_to_box_map.items():
-        corresponding_stack = box.replace('货箱_', '纸垛_') + '#'
-        if corresponding_stack in stack_to_zone_map:
-            task_mapping[shelf] = stack_to_zone_map[corresponding_stack]
+    
+    for shelf, box in box_map.items():
+        stack = box.replace('货箱_', '纸垛_') + '#'
+        if stack in stack_map:
+            task_map[shelf] = stack_map[stack]
         else:
-            unassigned_shelf = shelf
+            special_shelf = shelf
     
-    print("\n【最终任务地图 (货架 -> 目标区域)】")
-    for shelf, zone in task_mapping.items():
-        print(f"  - {shelf} 的货箱 -> {zone}")
-    if unassigned_shelf:
-        print(f"  - ★ {unassigned_shelf} 的货箱是特殊任务，需码垛在其他箱子上。 ★")
-    print("-" * 30)
-
-    # --- 3. 优化路径策略计算 ---
-    print("\n--- 正在根据轮空区域和特殊货箱位置优化路径... ---")
-
-    # 步骤1: 根据用户指定的“派送顺序”来反推出“揽收顺序”
-    pickup_zone_order = []
-    strategy_reason = ""
-    if empty_zone == '区域_a':
-        # 用户要求派送顺序为 b,c,d,e,f
-        # 根据LIFO原则，揽收顺序必须是其倒序 f,e,d,c,b
-        delivery_zones_in_order = ['区域_b', '区域_c', '区域_d', '区域_e', '区域_f']
-        pickup_zone_order = delivery_zones_in_order[::-1]
-        strategy_reason = f"策略：轮空区域为 {empty_zone}, 目标派送顺序为 b->c->d->e->f。"
-
-    elif empty_zone == '区域_f':
-        # 用户要求派送顺序为 e,d,c,b,a
-        # 根据LIFO原则，揽收顺序必须是其倒序 a,b,c,d,e
-        delivery_zones_in_order = ['区域_e', '区域_d', '区域_c', '区域_b', '区域_a']
-        pickup_zone_order = delivery_zones_in_order[::-1]
-        strategy_reason = f"策略：轮空区域为 {empty_zone}, 目标派送顺序为 e->d->c->b->a。"
-
-    else:
-        # 用户要求默认派送顺序为 b,c,d,e,f,a
-        # 根据LIFO原则，揽收顺序必须是其倒序 a,f,e,d,c,b
-        delivery_zones_in_order = ['区域_b', '区域_c', '区域_d', '区域_e', '区域_f', '区域_a']
-        # 移除轮空区域
-        delivery_zones_in_order = [z for z in delivery_zones_in_order if z != empty_zone]
-        pickup_zone_order = delivery_zones_in_order[::-1]
-        strategy_reason = f"策略：轮空区域为 {empty_zone}, 采用默认派送顺序。"
+    # 获取放置顺序
+    zone_order = get_delivery_zone_order(empty_zone)
+    pickup_order = get_optimized_pickup_order(zone_order, task_map, special_shelf, shelf_to_access_point_map)
+    delivery_order = get_delivery_order(pickup_order, special_shelf)
     
-    print(strategy_reason)
+    print(f"\n轮空区域: {empty_zone}")
+    print(f"特殊货架: {special_shelf if special_shelf else '无'}")
+    print("任务映射:")
+    for shelf, zone in task_map.items():
+        print(f"  {shelf} -> {zone}")
+    if special_shelf:
+        print(f"  {special_shelf} -> 特殊货箱(需要码垛)")
+    
+    print(f"配送区域顺序: {zone_order}")
+    print(f"揽收顺序: {pickup_order}")
+    print(f"派送顺序: {delivery_order}")
+    
+    print(f"\n车辆存储验证:")
+    print(f"第一层(前3个): {pickup_order[:3]}")
+    print(f"第二层(后3个): {pickup_order[3:]}")
+    print(f"放置顺序(先放第二层,再放第一层): {delivery_order}")
+    
+    # 输出车辆每一步的放置步骤
+    print_delivery_steps(delivery_order, task_map, special_shelf)
 
-    reverse_task_mapping = {v: k for k, v in task_mapping.items()}
-    base_pickup_shelves = [reverse_task_mapping[zone] for zone in pickup_zone_order if zone in reverse_task_mapping]
-
-    # 步骤2: 规划特殊货箱的抓取时机
-    final_pickup_order_list = []
-    if unassigned_shelf:
-        special_shelf_ap = shelf_to_access_point_map[unassigned_shelf]
-        
-        trigger_shelf = None
-        for shelf in base_pickup_shelves:
-            if shelf_to_access_point_map[shelf] == special_shelf_ap:
-                trigger_shelf = shelf
-                break
-                
-        if trigger_shelf:
-            # 将特殊货箱插入到“顺路”的普通货箱之前
-            temp_order = []
-            for shelf in base_pickup_shelves:
-                if shelf == trigger_shelf:
-                    temp_order.append(unassigned_shelf) # 先抓特殊货箱
-                temp_order.append(shelf) # 再抓普通货箱
-            final_pickup_order_list = temp_order
+def print_delivery_steps(delivery_order, task_map, special_shelf):
+    """输出车辆每一步的放置步骤"""
+    print(f"\n=== 车辆放置步骤 ===")
+    for i, shelf in enumerate(delivery_order, 1):
+        if shelf == special_shelf:
+            print(f"第{i}步: 从车上取出 {shelf} 上的货箱，码垛在已放置的纸垛上")
         else:
-            # 理论上此情况不会发生，但作为安全保障保留
-            final_pickup_order_list = base_pickup_shelves + [unassigned_shelf]
-            print("优化：未在基础路径上找到顺路机会，将在常规任务完成后最后抓取特殊货箱。")
-    else:
-        final_pickup_order_list = base_pickup_shelves
-        print("优化：本轮无特殊码垛任务。")
+            zone = task_map[shelf]
+            print(f"第{i}步: 从车上取出 {shelf} 上的货箱，放置到 {zone}")
+    print("完成所有放置任务！")
 
-    fixed_pickup_order = tuple(final_pickup_order_list)
-    cost_fixed_strategy = calculate_total_cost(fixed_pickup_order, task_mapping, shelf_access_points, shelf_to_access_point_map, delivery_zones, start_point, ROTATION_COST, unassigned_shelf)
-    # print("计算完成！")
+# ---------- 主入口 ----------
+def main():
+    # 正常随机测试
+    shelves = [f'货架_{i}' for i in range(1, 7)]
+    boxes = [f'货箱_{i}' for i in range(1, 7)]
+    stacks = [f'纸垛_{i}#' for i in range(1, 7)]
+    zones = list(delivery_zones.keys())
 
-    # --- 4. 输出结果 ---
-    print("\n\n=============== 优化策略结果 ================")
-    print(f"\n【优化策略】")
-    print(f"  - 总成本 (路程+旋转): {cost_fixed_strategy:.2f}")
-    print(f"  - 最终揽收顺序: {fixed_pickup_order}")
-    
-    # 输出简化的货架编号序列
-    shelf_numbers = [shelf.replace('货架_', '') for shelf in fixed_pickup_order]
-    print(f"  - 揽收编号序列: {','.join(shelf_numbers)}")
-    
-    # 获取派送顺序，并处理码垛逻辑冲突
-    fixed_delivery_order = get_two_layer_lifo_order(fixed_pickup_order, unassigned_shelf)
-    print(f"  - 派送顺序 (两层LIFO):")
-    
-    for i, shelf in enumerate(fixed_delivery_order):
-        if shelf == unassigned_shelf:
-            # 码垛任务的目标是它之前派送的那个货箱
-            stacking_target_shelf = None
-            current_unassigned_index = fixed_delivery_order.index(unassigned_shelf)
-            if current_unassigned_index > 0:
-                 stacking_target_shelf = fixed_delivery_order[current_unassigned_index - 1]
-            target_info = f"特殊任务(码垛在来自 '{stacking_target_shelf}' 的货箱上)"
-        else:
-            target_info = task_mapping[shelf]
-        print(f"    第 {i+1} 步: 将来自 {shelf} 的货箱放置到 {target_info}")
-    print("=======================================================")
+    task_map, special_shelf, empty_zone = generate_task_mapping(shelves, boxes, stacks, zones)
+    zone_order = get_delivery_zone_order(empty_zone)
+    pickup_order = get_optimized_pickup_order(zone_order, task_map, special_shelf, shelf_to_access_point_map)
+    delivery_order = get_delivery_order(pickup_order, special_shelf)
 
-    # --- 5. 可视化 ---
-    fixed_path_coords = get_path_coordinates(fixed_pickup_order, task_mapping, shelf_access_points, shelf_to_access_point_map, delivery_zones, start_point, unassigned_shelf)
-    visualize_path(fixed_path_coords, shelf_access_points, delivery_zones, start_point)
+    cost = calculate_total_cost(pickup_order, task_map, shelf_access_points, shelf_to_access_point_map, delivery_zones, start_point, ROTATION_COST, special_shelf)
 
-def get_two_layer_lifo_order(pickup_order, unassigned_shelf):
-    """
-    根据两层LIFO逻辑计算派送顺序，并处理码垛逻辑冲突
-    """
-    pickup_list = list(pickup_order)
+    print("\n=== 任务与路径信息 ===")
+    print(f"轮空区域: {empty_zone}")
+    print(f"特殊货架: {special_shelf if special_shelf else '无'}")
+    print(f"揽收顺序: {pickup_order}")
+    print(f"派送顺序: {delivery_order}")
+    print(f"总成本: {cost:.2f}")
     
-    layer1 = pickup_list[:3]
-    layer2 = pickup_list[3:6] if len(pickup_list) > 3 else []
+    # 调试信息
+    print("\n=== 调试信息 ===")
+    print("任务映射:")
+    for shelf, zone in task_map.items():
+        print(f"  {shelf} -> {zone}")
     
-    layer1_delivery = layer1[::-1]
-    layer2_delivery = layer2[::-1]
+    print(f"\n配送区域顺序: {zone_order}")
     
-    delivery_order = layer2_delivery + layer1_delivery
+    # 验证放置顺序逻辑
+    print(f"\n车辆存储验证:")
+    print(f"第一层(前3个): {pickup_order[:3]}")
+    print(f"第二层(后3个): {pickup_order[3:]}")
+    print(f"放置顺序(先放第二层,再放第一层): {delivery_order}")
     
-    # 检查特殊货箱是否是第一个派送的，如果是，则与第二个交换
-    # 这个修正逻辑主要用于处理“不顺路”时，特殊货箱被最后揽收的情况
-    if unassigned_shelf and len(delivery_order) > 1 and delivery_order[0] == unassigned_shelf:
-        print("修正：检测到码垛任务与LIFO规则冲突，自动调整派送顺序。")
-        delivery_order[0], delivery_order[1] = delivery_order[1], delivery_order[0]
-        
-    return delivery_order
+    # 输出车辆每一步的放置步骤
+    print_delivery_steps(delivery_order, task_map, special_shelf)
+    
+    # 测试轮空区域为f的情况
+    test_empty_zone_f()
 
-# 运行策略
 if __name__ == '__main__':
-    run_fixed_strategy()
+    main()
