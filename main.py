@@ -100,7 +100,7 @@ class VehicleScheduler:
         return self._optimize_shelf_groups(pickup_order)
     
     def _optimize_shelf_groups(self, pickup_order):
-        """优化同组货架顺序：特殊货架优先"""
+        """优化同组货架顺序：让同组货架相邻，实现顺路抓取"""
         if not self.special_shelf or self.special_shelf not in pickup_order:
             return pickup_order
         
@@ -111,11 +111,22 @@ class VehicleScheduler:
         special_idx = pickup_order.index(self.special_shelf)
         partner_idx = pickup_order.index(partner)
         
-        # 特殊货架排在同组货架前面
-        if special_idx > partner_idx:
-            pickup_order[special_idx], pickup_order[partner_idx] = pickup_order[partner_idx], pickup_order[special_idx]
+        # 移除同组货架，准备重新插入
+        pickup_order_copy = pickup_order.copy()
+        pickup_order_copy.remove(self.special_shelf)
+        pickup_order_copy.remove(partner)
         
-        return pickup_order
+        # 计算最佳插入位置（让同组货架相邻）
+        # 优先考虑特殊货架在前的情况
+        best_pos = min(special_idx, partner_idx)
+        
+        # 将同组货架插入到最佳位置（特殊货架在前）
+        pickup_order_copy.insert(best_pos, partner)      # 先插入普通货架
+        pickup_order_copy.insert(best_pos, self.special_shelf)  # 再插入特殊货架（会在前面）
+        
+        print(f"\n【顺路优化】同组货架 {self.special_shelf} 和 {partner} 已调整为相邻位置")
+        
+        return pickup_order_copy
     
     def get_delivery_order(self, pickup_order):
         """根据FIFO机制获取放置顺序"""
