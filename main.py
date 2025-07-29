@@ -71,73 +71,72 @@ class VehicleScheduler:
         print(f"  - ★ {self.empty_zone} 是本轮的轮空区域 ★")
     
     def get_zone_order(self):
-        """获取配送区域顺序"""
+        """获取配送区域顺序，路线1严格为bcdefa（轮空在bcdef），路线2为edcba（轮空在f）"""
         if self.empty_zone == '区域_f':
+            # 路线2：edcba
             return ['区域_e', '区域_d', '区域_c', '区域_b', '区域_a']
         else:
+            # 路线1：bcdefa，轮空在bcdef
             all_zones = ['区域_b', '区域_c', '区域_d', '区域_e', '区域_f', '区域_a']
             return [z for z in all_zones if z != self.empty_zone]
     
     def get_pickup_order(self):
-        """计算揽收顺序"""
+        """计算揽收顺序：普通货架严格区域顺序+FIFO，特殊货架可插入任意非轮空区域，实现顺路抓取最大化"""
         zone_order = self.get_zone_order()
-        
         # 区域->货架映射
         zone_to_shelf = {v: k for k, v in self.task_map.items()}
+        # 只生成普通货架顺序
         delivery_shelves = [zone_to_shelf[zone] for zone in zone_order if zone in zone_to_shelf]
-        
-        # 插入特殊货架（避免成为第一个放置的箱子）
-        if self.special_shelf:
-            # FIFO转换：delivery_shelves[3:] + delivery_shelves[:3]
-            # 要避免特殊货架成为第一个放置的，需要避免它在delivery_shelves的位置0
-            # 因为位置0经过FIFO后会变成位置3（第一个放置）
-            available_positions = [1, 2, 3, 4, 5]  # 避免位置0
-            insert_pos = random.choice(available_positions)
-            delivery_shelves.insert(insert_pos, self.special_shelf)
-        
         # FIFO机制：后进先出
-        return delivery_shelves[3:] + delivery_shelves[:3]
+        pickup_order = delivery_shelves[3:] + delivery_shelves[:3]
+        # 特殊货架插入时，只能插入第一层（pickup_order[:3]）末尾或中间，绝不插入pickup_order[3:]（第二层）
+        if self.special_shelf:
+            partner = SHELF_GROUPS.get(self.special_shelf)
+            sp_pos = SHELF_ACCESS_POINTS[self.special_shelf]
+            inserted = False
+            if partner and partner in pickup_order:
+                partner_pos = SHELF_ACCESS_POINTS[partner]
+                idx = pickup_order.index(partner)
+                if sp_pos == partner_pos:
+                    # partner在第一层，插在partner后且不越界
+                    if idx < 3:
+                        insert_pos = min(idx + 1, 3)
+                        pickup_order.insert(insert_pos, self.special_shelf)
+                        inserted = True
+            if not inserted:
+                # 只能插在第一层末尾
+                pickup_order.insert(3, self.special_shelf)
+        return pickup_order
     
     def get_optimized_pickup_sequence(self, pickup_order):
-        """优化揽收序列：让同组货架在同一点连续抓取"""
-        optimized_sequence = []
-        remaining_shelves = pickup_order.copy()
-        
-        while remaining_shelves:
-            next_shelf = remaining_shelves[0]
-            current_position = SHELF_ACCESS_POINTS[next_shelf]
-            
-            # 找到当前位置的所有货架
-            shelves_at_position = [s for s in remaining_shelves 
-                                 if SHELF_ACCESS_POINTS[s] == current_position]
-            
-            # 如果特殊货架在此位置，优先处理特殊货架+同组货架
-            if self.special_shelf in shelves_at_position:
+        """优化揽收序列：保证delivery_order中同pickup点的特殊货架和同组货架在optimized_pickup_order中相邻"""
+        seq = pickup_order.copy()
+        # 以delivery_order为基准，找到所有同pickup点的特殊货架-同组货架对
+        delivery_order = self.get_delivery_order(pickup_order)
+        handled = set()
+        for i, shelf in enumerate(delivery_order):
+            if shelf in handled:
+                continue
+            if shelf == self.special_shelf:
                 partner = SHELF_GROUPS.get(self.special_shelf)
-                if partner and partner in shelves_at_position:
-                    # 优化：连续抓取特殊货架和同组货架
-                    optimized_sequence.extend([self.special_shelf, partner])
-                    remaining_shelves.remove(self.special_shelf)
-                    remaining_shelves.remove(partner)
-                else:
-                    # 只抓取下一个货架
-                    optimized_sequence.append(next_shelf)
-                    remaining_shelves.remove(next_shelf)
-            else:
-                # 正常抓取下一个货架
-                optimized_sequence.append(next_shelf)
-                remaining_shelves.remove(next_shelf)
-        
-        # 检查优化后的序列，确保特殊货架不在位置0（FIFO后会成为第一个放置的）
-        if self.special_shelf and len(optimized_sequence) == 6:
-            special_idx = optimized_sequence.index(self.special_shelf)
-            if special_idx == 0:  # 如果特殊货架在位置0，FIFO后会成为第一个放置的
-                # 将特殊货架移动到其他位置
-                optimized_sequence.pop(special_idx)
-                new_pos = random.choice([1, 2, 3, 4, 5])  # 避免位置0
-                optimized_sequence.insert(new_pos, self.special_shelf)
-        
-        return optimized_sequence
+                if partner and partner in delivery_order:
+                    sp_pos = SHELF_ACCESS_POINTS[self.special_shelf]
+                    partner_pos = SHELF_ACCESS_POINTS[partner]
+                    if sp_pos == partner_pos:
+                        # 在seq中强制相邻
+                        idx1 = seq.index(self.special_shelf)
+                        idx2 = seq.index(partner)
+                        if abs(idx1 - idx2) != 1:
+                            # 保持原顺序，特殊货架在前
+                            first, second = (self.special_shelf, partner) if idx1 < idx2 else (partner, self.special_shelf)
+                            seq = [s for s in seq if s != first and s != second]
+                            # 插入到原first位置
+                            insert_pos = min(idx1, idx2)
+                            seq.insert(insert_pos, first)
+                            seq.insert(insert_pos + 1, second)
+                        handled.add(self.special_shelf)
+                        handled.add(partner)
+        return seq
     
     def print_pickup_optimization(self, pickup_order):
         """分析揽收优化情况"""
@@ -145,8 +144,11 @@ class VehicleScheduler:
         pass
     
     def get_delivery_order(self, pickup_order):
-        """根据FIFO机制获取放置顺序"""
-        return pickup_order[3:] + pickup_order[:3]  # 后装先卸
+        """放置顺序严格等于zone_order（bcdefa或edcba），特殊货架不参与放置"""
+        zone_order = self.get_zone_order()
+        # 区域->货架映射
+        zone_to_shelf = {v: k for k, v in self.task_map.items()}
+        return [zone_to_shelf[zone] for zone in zone_order if zone in zone_to_shelf]
     
     def calculate_cost(self, pickup_order):
         """计算总路径成本"""
@@ -226,10 +228,12 @@ class VehicleScheduler:
         """输出格式化信息"""
         pickup_numbers = [shelf.split('_')[1] for shelf in pickup_order]
         pickup_str = ','.join(pickup_numbers)
-        
-        special_position = delivery_order.index(self.special_shelf) if self.special_shelf else -1
+        # 特殊货架不在delivery_order时，special_position为-1
+        if self.special_shelf and self.special_shelf in delivery_order:
+            special_position = delivery_order.index(self.special_shelf)
+        else:
+            special_position = -1
         route_type = 2 if self.empty_zone == '区域_f' else 1
-        
         print(f"\n=== 格式化输出 ===")
         print(f"揽收顺序({pickup_str}):特殊货箱在派送的顺序({special_position});路线({route_type})")
         print(f"{pickup_str}:{special_position};{route_type}")
